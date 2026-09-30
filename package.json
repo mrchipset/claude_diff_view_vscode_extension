@@ -37,6 +37,21 @@
           "default": "defaultAndCustom",
           "description": "Controls whether AI CLI Diff View uses its built-in text file rules together with custom settings, or only the custom settings."
         },
+        "ai-cli-diff-view.autoOpenDiffMode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "alreadyOpen",
+            "never"
+          ],
+          "default": "all",
+          "enumDescriptions": [
+            "Open a diff tab as soon as an external tool changes a file.",
+            "Only auto-open a diff tab when the changed file is already open in a text editor tab, so review stays limited to the files you are working on.",
+            "Never auto-open a diff tab. Changed files are still tracked as pending and can be opened on demand."
+          ],
+          "markdownDescription": "When AI CLI Diff View is allowed to open a diff tab by itself after an external tool changes a file.\n\nWhichever mode you pick, every changed file is still snapshotted and listed as pending — nothing is lost or auto-accepted. Use `Alt+L` / `Alt+H`, the nav bar, or **AI CLI Diff: Open Pending File** to review them on demand.\n\nNotes:\n- Only external writes trigger this. Saving from inside VS Code never opens a diff.\n- `never` also stops the extension from re-routing a pending file you open yourself into a diff tab, so pending files stay readable as plain text.\n- The built-in Claude session (**Start Claude Session**) counts as an automatic open and is suppressed the same way.\n- An already-open diff tab is never replaced; this setting only controls *new* tabs."
+        },
         "ai-cli-diff-view.supportedFileExtensions": {
           "type": "array",
           "default": [],

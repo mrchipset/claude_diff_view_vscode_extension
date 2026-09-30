@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { DiffManager } from '../diff/diffManager';
+import { shouldAutoOpenDiff } from '../diff/autoOpenPolicy';
 import { IAiRunner, StatusCallback, ProgressCallback } from './aiRunner';
 
 // ---- Types matching claude CLI stream-json output ----
@@ -252,10 +253,18 @@ export class ClaudeRunner implements IAiRunner {
       if (filePath) {
         pendingToolUses.delete(toolEvent.tool_use_id);
         const basename = filePath.split(/[\\/]/).pop() ?? filePath;
-        onProgress?.(`Opening diff: ${basename}`);
-        this.diffManager.openDiff(filePath).catch((err: unknown) => {
-          console.error('[ai-cli-diff-view] openDiff failed:', err);
-        });
+        // `snapshotBefore()` already registered the pending snapshot;
+        // autoOpenDiffMode only decides whether we also take over a tab. When
+        // suppressed, the file stays in the pending list and can be opened with
+        // Alt+L / "Open Pending File".
+        if (shouldAutoOpenDiff(filePath)) {
+          onProgress?.(`Opening diff: ${basename}`);
+          this.diffManager.openDiff(filePath).catch((err: unknown) => {
+            console.error('[ai-cli-diff-view] openDiff failed:', err);
+          });
+        } else {
+          onProgress?.(`Changed: ${basename}`);
+        }
       }
       return;
     }

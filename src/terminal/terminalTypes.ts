@@ -1,3 +1,5 @@
+import type { AutoOpenDiffMode } from '../diff/autoOpenPolicy';
+
 export type ThemePreset = 'vscode' | 'default-dark' | 'solarized-dark' | 'dracula' | 'custom';
 export type CursorStyle = 'block' | 'underline' | 'bar';
 
@@ -38,8 +40,13 @@ export interface ExclusionSettings {
   excludedPathPatterns: string[];
 }
 
+/** When diff tabs may open by themselves. See `src/diff/autoOpenPolicy.ts`. */
+export interface AutoOpenDiffModeSettings {
+  autoOpenDiffMode: AutoOpenDiffMode;
+}
+
 export interface TerminalSettingsPayload
-  extends TerminalSettings, BurstDetectionSettings, SoundNotificationSettings, FileLimitSettings, ExclusionSettings {
+  extends TerminalSettings, BurstDetectionSettings, SoundNotificationSettings, FileLimitSettings, ExclusionSettings, AutoOpenDiffModeSettings {
   supportedFileExtensions: string[];
 }
 
@@ -61,6 +68,10 @@ export const DEFAULT_FILE_LIMIT_SETTINGS: FileLimitSettings = {
 export const DEFAULT_EXCLUSION_SETTINGS: ExclusionSettings = {
   excludedPathSegments: [],
   excludedPathPatterns: [],
+};
+
+export const DEFAULT_AUTO_OPEN_MODE_SETTINGS: AutoOpenDiffModeSettings = {
+  autoOpenDiffMode: 'all',
 };
 
 /** 0 = tắt giới hạn. Trần trên chỉ để chặn nhập nhầm, không phải khuyến nghị. */

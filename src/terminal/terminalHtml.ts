@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { findInstallableForPrimary } from './fontInstaller';
 import { PENDING_FILES_CSS } from './pendingFilesPage';
-import { DEFAULT_BURST_DETECTION_SETTINGS, DEFAULT_EXCLUSION_SETTINGS, DEFAULT_FILE_LIMIT_SETTINGS, DEFAULT_SETTINGS, DEFAULT_SOUND_NOTIFICATION_SETTINGS } from './terminalTypes';
+import { DEFAULT_AUTO_OPEN_MODE_SETTINGS, DEFAULT_BURST_DETECTION_SETTINGS, DEFAULT_EXCLUSION_SETTINGS, DEFAULT_FILE_LIMIT_SETTINGS, DEFAULT_SETTINGS, DEFAULT_SOUND_NOTIFICATION_SETTINGS } from './terminalTypes';
 
 interface FontOption {
   label: string;
@@ -697,6 +697,23 @@ ${FONT_OPTIONS.map((f) => {
 
         <h3 class="settings-section-title">Advanced</h3>
         <div class="field">
+          <label for="f-auto-open-mode">Auto-open diff tabs</label>
+          <select id="f-auto-open-mode">
+            <option value="all">All changed files</option>
+            <option value="alreadyOpen">Only files already open</option>
+            <option value="never">Never</option>
+          </select>
+        </div>
+        <div class="setting-help">
+          Controls when a diff tab opens by itself after an external tool changes a file.
+          Changed files are always tracked as pending — this only decides whether they
+          also take over a tab and the focus. Review them any time with
+          <code>Alt+L</code> / <code>Alt+H</code> or the "Open Pending File" command.
+          <strong>Never</strong> also keeps a pending file you open yourself readable as
+          plain text instead of re-routing it into a diff tab.
+        </div>
+
+        <div class="field">
           <label for="f-burst-enabled">Burst-write detection</label>
           <input id="f-burst-enabled" type="checkbox">
         </div>
@@ -813,7 +830,7 @@ ${FONT_OPTIONS.map((f) => {
         return;
       }
 
-      const DEFAULTS = ${JSON.stringify({ ...DEFAULT_SETTINGS, ...DEFAULT_BURST_DETECTION_SETTINGS, ...DEFAULT_SOUND_NOTIFICATION_SETTINGS, ...DEFAULT_FILE_LIMIT_SETTINGS, ...DEFAULT_EXCLUSION_SETTINGS })};
+      const DEFAULTS = ${JSON.stringify({ ...DEFAULT_SETTINGS, ...DEFAULT_BURST_DETECTION_SETTINGS, ...DEFAULT_SOUND_NOTIFICATION_SETTINGS, ...DEFAULT_FILE_LIMIT_SETTINGS, ...DEFAULT_EXCLUSION_SETTINGS, ...DEFAULT_AUTO_OPEN_MODE_SETTINGS })};
       let currentSettings = JSON.parse(JSON.stringify(DEFAULTS));
 
       const termHost = document.getElementById('term-host');
@@ -1270,6 +1287,7 @@ ${FONT_OPTIONS.map((f) => {
       const fCursorStyle = document.getElementById('f-cursor-style');
       const fCursorBlink = document.getElementById('f-cursor-blink');
       const fSoundNotifications = document.getElementById('f-sound-notifications');
+      const fAutoOpenMode = document.getElementById('f-auto-open-mode');
       const fBurstEnabled = document.getElementById('f-burst-enabled');
       const fBurstWindow = document.getElementById('f-burst-window');
       const fBurstThreshold = document.getElementById('f-burst-threshold');
@@ -1395,6 +1413,7 @@ ${FONT_OPTIONS.map((f) => {
         fCursorBlink.checked = s.cursorBlink;
         fSoundNotifications.checked = s.soundNotificationsEnabled;
         setFileExtensions(s.supportedFileExtensions);
+        fAutoOpenMode.value = s.autoOpenDiffMode;
         fBurstEnabled.checked = s.burstDetectionEnabled;
         fBurstWindow.value = String(s.burstDetectionWindowMs);
         fBurstThreshold.value = String(s.burstDetectionThreshold);
@@ -1429,6 +1448,7 @@ ${FONT_OPTIONS.map((f) => {
           cursorBlink: !!fCursorBlink.checked,
           soundNotificationsEnabled: !!fSoundNotifications.checked,
           supportedFileExtensions: fileExtensions.slice(),
+          autoOpenDiffMode: fAutoOpenMode.value || DEFAULTS.autoOpenDiffMode,
           burstDetectionEnabled: !!fBurstEnabled.checked,
           burstDetectionWindowMs: isFinite(burstWindow) ? Math.min(5000, Math.max(50, burstWindow)) : DEFAULTS.burstDetectionWindowMs,
           burstDetectionThreshold: isFinite(burstThreshold) ? Math.min(500, Math.max(2, burstThreshold)) : DEFAULTS.burstDetectionThreshold,

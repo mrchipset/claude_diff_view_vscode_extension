@@ -13,6 +13,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { DiffManager } from '../diff/diffManager';
+import { getAutoOpenDiffMode, shouldAutoOpenDiff } from '../diff/autoOpenPolicy';
 import { BaselineScanner } from './baselineScanner';
 import { BaselineStore } from './baselineStore';
 import { isTextFile } from './fileTypeRules';
@@ -461,6 +462,16 @@ export class WorkspaceWatcher {
     fromBurstDump = false
   ): void {
     this.diffManager.loadSnapshot(filePath, originalContent, fileExistedBefore);
+
+    // `never` / `alreadyOpen` (and files not open yet): the change is STILL
+    // registered as pending above, we only skip the tab. The check lives here
+    // rather than in resolveOrHold so the burst-dump branch
+    // (scheduleHoldResolve) goes through the exact same gate, and so
+    // `alreadyOpen` is evaluated at the moment the tab would actually open.
+    if (!shouldAutoOpenDiff(filePath)) {
+      return;
+    }
+
     this.diffManager.openDiff(filePath, fromBurstDump ? { preserveFocus: true } : undefined).catch((err: unknown) => {
       console.error('[ai-cli-diff-view] workspaceWatcher openDiff failed:', err);
     });
@@ -488,7 +499,8 @@ export class WorkspaceWatcher {
     // dùng hint này thay vì activeTab tại thời điểm clear (đã có thể bị hỏng
     // bởi race) nếu git branch đổi ngay sau đó.
     const now = Date.now();
-    if (now - this.lastAutoOpenActivityAt > WorkspaceWatcher.ACTIVE_TAB_CAPTURE_GAP_MS) {
+    if (getAutoOpenDiffMode() !== 'never' &&
+        now - this.lastAutoOpenActivityAt > WorkspaceWatcher.ACTIVE_TAB_CAPTURE_GAP_MS) {
       this.diffManager.markActiveTabBeforeAutoOpen();
     }
     this.lastAutoOpenActivityAt = now;

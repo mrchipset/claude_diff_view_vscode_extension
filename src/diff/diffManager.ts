@@ -83,6 +83,7 @@ export class DiffManager {
       if (isFileNotFound(err)) {
         this.snapshots.set(absPath, { content: '', fileExistedBefore: false });
         void this.store.save(this.snapshots);
+        this._onDidChangeDiffs.fire();
       }
       return;
     }
@@ -99,6 +100,11 @@ export class DiffManager {
       return;
     }
     void this.store.save(this.snapshots);
+    // `snapshotBefore()` is the built-in runner's path. It used to stay silent
+    // because `openDiff()` always fired the event right after; once
+    // autoOpenDiffMode suppresses the tab, nothing else would refresh the
+    // pending list / nav bar / context key.
+    this._onDidChangeDiffs.fire();
   }
 
   async openDiff(filePath: string, options?: { preserveFocus?: boolean }): Promise<void> {

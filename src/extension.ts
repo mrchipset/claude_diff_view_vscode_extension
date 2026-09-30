@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DiffManager } from './diff/diffManager';
 import { DiffEditorProvider, DIFF_EDITOR_VIEW_TYPE } from './diff/diffWebviewPanel';
+import { getAutoOpenDiffMode, refreshAutoOpenDiffMode } from './diff/autoOpenPolicy';
 import { IAiRunner } from './runner/aiRunner';
 import { WorkspaceWatcher } from './watcher/workspaceWatcher';
 import { refreshTextFileRules } from './watcher/fileTypeRules';
@@ -16,6 +17,7 @@ export function activate(context: vscode.ExtensionContext): void {
   refreshTextFileRules();
   refreshFileSizeLimit();
   refreshPathExclusions();
+  refreshAutoOpenDiffMode();
 
   const diffManager       = new DiffManager(context);
   const workspaceWatcher  = new WorkspaceWatcher(diffManager);
@@ -58,6 +60,9 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       if (e.affectsConfiguration('ai-cli-diff-view.maxFileLines')) {
         refreshFileSizeLimit();
+      }
+      if (e.affectsConfiguration('ai-cli-diff-view.autoOpenDiffMode')) {
+        refreshAutoOpenDiffMode();
       }
       if (e.affectsConfiguration('ai-cli-diff-view.excludedPathSegments') ||
           e.affectsConfiguration('ai-cli-diff-view.excludedPathPatterns')) {
@@ -151,6 +156,10 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!(tab.input instanceof vscode.TabInputText)) { return; }
     const fsPath = tab.input.uri.fsPath;
     if (!diffManager.hasPendingDiff(fsPath)) { return; }
+    // `never`: the user opened the file on purpose — respect that instead of
+    // turning it into a diff tab. Under `all` / `alreadyOpen` re-routing still
+    // matches the intent.
+    if (getAutoOpenDiffMode() === 'never') { return; }
     void (async () => {
       try {
         await vscode.window.tabGroups.close(tab);

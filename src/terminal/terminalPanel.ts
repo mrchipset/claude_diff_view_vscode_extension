@@ -10,9 +10,12 @@ import {
 } from './pendingFilesPage';
 import { buildTerminalHtml } from './terminalHtml';
 import { applySoundNotifications } from '../commands/soundNotifications';
+import { isAutoOpenDiffMode } from '../diff/autoOpenPolicy';
 import {
+  AutoOpenDiffModeSettings,
   BurstDetectionSettings,
   CursorStyle,
+  DEFAULT_AUTO_OPEN_MODE_SETTINGS,
   DEFAULT_BURST_DETECTION_SETTINGS,
   DEFAULT_EXCLUSION_SETTINGS,
   DEFAULT_FILE_LIMIT_SETTINGS,
@@ -210,7 +213,32 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
       ...this.loadSoundNotificationSettings(),
       ...this.loadFileLimitSettings(),
       ...this.loadExclusionSettings(),
+      ...this.loadAutoOpenDiffModeSettings(),
     };
+  }
+
+  private loadAutoOpenDiffModeSettings(): AutoOpenDiffModeSettings {
+    const config = vscode.workspace.getConfiguration('ai-cli-diff-view');
+    const value = config.get<string>(
+      'autoOpenDiffMode',
+      DEFAULT_AUTO_OPEN_MODE_SETTINGS.autoOpenDiffMode
+    );
+    return {
+      autoOpenDiffMode: isAutoOpenDiffMode(value)
+        ? value
+        : DEFAULT_AUTO_OPEN_MODE_SETTINGS.autoOpenDiffMode,
+    };
+  }
+
+  private async saveAutoOpenDiffModeSettings(incoming: Partial<AutoOpenDiffModeSettings>): Promise<void> {
+    const next = this.loadAutoOpenDiffModeSettings();
+    const value = incoming.autoOpenDiffMode;
+    const config = vscode.workspace.getConfiguration('ai-cli-diff-view');
+    await config.update(
+      'autoOpenDiffMode',
+      isAutoOpenDiffMode(value) ? value : next.autoOpenDiffMode,
+      vscode.ConfigurationTarget.Global
+    );
   }
 
   private loadExclusionSettings(): ExclusionSettings {
@@ -548,6 +576,7 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
             this.saveSoundNotificationSettings(incoming),
             this.saveFileLimitSettings(incoming),
             this.saveExclusionSettings(incoming),
+            this.saveAutoOpenDiffModeSettings(incoming),
           ]).then(() => {
             this.view?.webview.postMessage({ type: 'settings', settings: this.loadSettingsPayload() });
           });

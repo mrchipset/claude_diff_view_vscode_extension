@@ -80,6 +80,8 @@ whole-file false additions.
 
 The watcher must also handle:
 
+- whether the change may open a diff tab at all, per `autoOpenDiffMode`
+  (`src/diff/autoOpenPolicy.ts`);
 - text-file rules from `fileTypeRules.ts`;
 - excluded path segments from `pathExclusions.ts`, including the
   user-configured `excludedPathSegments` / `excludedPathPatterns`;
@@ -128,6 +130,13 @@ Contributed settings are defined in `package.json`:
 - `supportedFileDetectionMode`, `supportedFileExtensions`,
   `supportedFilenames`, and `supportedFilenamePatterns` control reviewable
   text files.
+- `autoOpenDiffMode` decides whether a detected change may open a diff tab by
+  itself: `all` (default), `alreadyOpen` (only files already open in a text
+  editor tab), or `never`. It is consulted by `WorkspaceWatcher.triggerDiff`,
+  the built-in Claude runner, and `autoRouteTab` (`src/diff/autoOpenPolicy.ts`).
+  In every mode the change is still registered as pending, so it stays
+  reviewable via `Alt+L` / the nav bar / **Open Pending File**; `never` also
+  stops `autoRouteTab` from re-routing a pending file you open yourself.
 - `maxFileLines` skips files that are too large for safe diffing; `0` disables
   the limit.
 - `excludedPathSegments` and `excludedPathPatterns` add ignore rules on top of
