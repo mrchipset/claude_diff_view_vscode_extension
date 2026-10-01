@@ -11,8 +11,8 @@ session launcher is Claude-specific.
 
 - `src/extension.ts` — extension activation and service wiring.
 - `src/commands/` — command registration and sound-notification settings.
-- `src/diff/` — diff state, snapshots, hunk calculation, navigation, and the
-  Monaco custom-editor webview.
+- `src/diff/` — diff state, snapshots, hunk calculation, hunk grouping, navigation,
+  and the Monaco custom-editor webview.
 - `src/runner/` — AI runner interface and the built-in Claude runner.
 - `src/terminal/` — embedded xterm/node-pty terminal and pending-file UI.
 - `src/views/` — auxiliary webview panels such as the pending-diff nav bar.
@@ -64,10 +64,20 @@ cleanup must preserve restore compatibility.
 Hunk-level actions are sent between the webview and extension with
 `postMessage`. Accepting a hunk advances the in-memory baseline; reverting a
 hunk writes the original content back to disk. Keep this intentional asymmetry
-when changing diff behavior. `hunkCalculator.ts` and
-`res/webview/diff.monaco.js` also distinguish render sub-hunks from grouped
-action blocks, so changes to hunk grouping require checking both rendering and
-accept/revert behavior.
+when changing diff behavior.
+
+`res/webview/diff.monaco.js` still runs on two granularities — decorations and
+view zones iterate `state.hunks` (split per line pair so a removed line renders
+directly above its replacement), while buttons, hit-testing, F7 navigation and
+the "n / N" pill iterate `state.groups`. Since the change-list work, `groups` is
+**not** computed in the webview: `src/diff/hunkGroups.ts` (`buildChangeGroups()`)
+is the single source, computed by the extension and shipped in the `set`
+message. `DiffManager.acceptChangeBlock()` / `rejectChangeBlock()` (driven by
+the sidebar change list) reuse the same module, so its block ordering — and thus
+every `ChangeGroup.id` — must stay deterministic for identical snapshot +
+current content. Changes to the split/merge rules therefore affect the
+sidebar list and its Keep/Undo buttons as well as diff rendering and hunk
+actions.
 
 ### Workspace and baseline detection
 
@@ -110,9 +120,16 @@ Do not claim it is implemented unless the watcher is actually extended.
 
 - `ai-cli-diff-view.terminal` provides the embedded terminal, session status,
   settings, and pending-file list. It is moved to the Secondary Side Bar once
-  per user installation.
+  per user installation. Its "Pending changes" tree renders each file with a
+  `+added/-removed` badge and expands into the file's change blocks (line range
+  plus **Keep**/**Undo**), rebuilt from `DiffManager.getFileChangeSummary()` on
+  every `onDidChangeDiffs`. Clicking a block row opens that file's diff and
+  scrolls to the block (`DiffManager.openChangeBlock()`).
 - `ai-cli-diff-view.navBar` provides the auxiliary pending-diff navigation
-  panel.
+  panel (Explorer → "AI CLI Diff"). It describes the anchor file — the active
+  diff tab, or the first pending file — with a `+added/-removed` badge and that
+  file's change blocks (line range plus **Keep**/**Undo**), refreshed from
+  `DiffManager.getFileChangeSummary()` whenever `setActiveFile()` is called.
 - `res/webview/diff.monaco.js` and `diff.monaco.css` render the custom diff.
 
 Navigation commands are `Alt+H` and `Alt+L`, gated by the

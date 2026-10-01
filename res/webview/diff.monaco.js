@@ -244,10 +244,11 @@
       state.originalContent = msg.originalContent || '';
       state.currentContent = msg.currentContent || '';
       state.hunks = msg.hunks || [];
-      // Gán ngay cạnh `hunks` chứ không đợi tới lúc render: `maybeAutoReveal()`
-      // và `updateHunkCounter()` bên dưới cũng đọc `groups`, nên để hai thứ luôn
-      // được thay cùng lúc thì không thể có cửa sổ đọc phải group cũ.
-      state.groups = buildGroups(state.hunks);
+      // Extension đã chia khối sẵn (src/diff/hunkGroups.ts) vì sidebar và
+      // DiffManager cũng cần đúng tập khối đó — webview chỉ đọc lại, không tự
+      // chia nữa. Gán ngay cạnh `hunks` để `maybeAutoReveal()` và
+      // `updateHunkCounter()` bên dưới không bao giờ đọc phải group cũ.
+      state.groups = msg.groups || [];
 
       document.getElementById('toolbar-file').textContent = msg.filePath;
       applyNav(msg.nav);
@@ -276,9 +277,24 @@
       renderDiffDecorations();
       renderGroupWidgets();
       maybeAutoReveal();
+      // Mở từ danh sách thay đổi (sidebar / nav bar) -> nhảy thẳng tới khối đã
+      // bấm. Đặt sau maybeAutoReveal() và tự bật cờ didAutoReveal để lần auto
+      // reveal đầu tiên không kéo về khối đầu.
+      if (msg.revealGroupId) { revealGroupById(msg.revealGroupId); }
       updateHunkCounter();
       tlog('applySet render done');
       setInFlight(false);
+    }
+
+    /** Cuộn tới khối có `id` và bật thanh Accept/Reject của nó lên. */
+    function revealGroupById(id) {
+      const idx = state.groups.findIndex((g) => g.id === id);
+      if (idx === -1) { return; }
+      const group = state.groups[idx];
+      state.didAutoReveal = true;
+      state.editor.revealLineInCenter(group.anchorLine);
+      state.editor.setPosition({ lineNumber: group.anchorLine, column: 1 });
+      setHoveredGroup(idx);
     }
 
     function applyNav(nav) {
@@ -378,77 +394,10 @@
       });
     }
 
-    /**
-     * Gom các hunk liên tiếp cùng `groupId` thành khối thay đổi liền kề ban đầu.
-     *
-     * Phía extension tách khối ra theo từng cặp dòng để dòng cũ render đúng ngay
-     * trên dòng mới (Pass 3 trong hunkCalculator.ts). Ở đây gom lại thành đơn vị
-     * thao tác — mỗi khối một cặp nút Accept/Reject — theo hai điều kiện cắt:
-     *
-     *   1. `groupId` đổi  -> đã có DÒNG TRẮNG (dòng không đổi) xen giữa.
-     *   2. hunk con này có DÒNG ĐỎ trong khi khối đang gom đã có DÒNG XANH
-     *      -> tức mọi chuyển tiếp xanh -> đỏ đều mở khối mới.
-     *
-     * Hệ quả của (2): mỗi dòng bị thay thế có nút riêng, còn dòng xanh thêm mới
-     * không có dòng đỏ đối ứng thì dính vào cặp ngay phía trên nó. Vài hình dạng
-     * đáng nhớ: `R G R G` -> 2 khối; `R G G` -> 1 khối; `R R G` -> 1 khối (lúc
-     * gặp đỏ thứ hai khối chưa có xanh nào); xoá thuần / thêm thuần -> 1 khối.
-     *
-     * Điều kiện (2) là PHÂN KỲ CÓ CHỦ ĐÍCH khỏi quy ước git: `git add -p` từ chối
-     * tách khi giữa hai thay đổi không có dòng context. Ở đây cố ý mịn hơn.
-     *
-     * Gom theo run liên tiếp chứ không gom bằng Map: thứ tự trên-xuống vốn đã
-     * được đảm bảo, và làm thế biến nó thành ràng buộc cấu trúc thay vì tình cờ.
-     * Vì mỗi khối vẫn là một dải con LIÊN TIẾP của cùng một groupId, nó vẫn liền
-     * kề trong cả hai không gian chỉ số — bất biến mà applyAccept/applyReject
-     * dựa vào để gộp cả khối bằng một slice().concat().
-     *
-     * Mọi thứ đường nóng cần đều được tính sẵn ở đây, để hover và cuộn chỉ còn
-     * là đọc field.
-     */
-    function buildGroups(hunks) {
-      const groups = [];
-      let cur = null;
-      for (const h of hunks) {
-        const sameBlock = cur
-          && cur.groupId === h.groupId
-          && !(h.removedLines.length > 0 && cur.addedTexts.length > 0);
-        if (!sameBlock) {
-          cur = {
-            // Không còn 1-1 với groupId: một groupId có thể sinh nhiều khối, do
-            // điều kiện cắt (2). Giữ lại để so ranh giới dòng trắng.
-            groupId: h.groupId,
-            hunks: [h],
-            // Của hunk con ĐẦU TIÊN, không phải min/max: hunk con chỉ-thêm và cặp
-            // ngay sau nó có thể trùng originalStart, nên max() không phải điểm cuối.
-            originalStart: h.originalStart,
-            modifiedStart: h.modifiedStart,
-            removedTexts: h.removedLines.map(r => r.text),
-            addedTexts: h.addedLines.map(a => a.text),
-          };
-          groups.push(cur);
-        } else {
-          cur.hunks.push(h);
-          for (const r of h.removedLines) { cur.removedTexts.push(r.text); }
-          for (const a of h.addedLines) { cur.addedTexts.push(a.text); }
-        }
-      }
-      for (const g of groups) {
-        g.removedCount = g.removedTexts.length;
-        g.addedCount = g.addedTexts.length;
-        g.anchorLine = Math.max(1, g.modifiedStart + 1);
-        if (g.addedCount > 0) {
-          // Các dòng thêm của một group luôn liền nhau kể từ modifiedStart, kể cả
-          // khi giữa group có hunk con chỉ-xoá (nó không sinh dòng phía modified).
-          g.startLine = g.modifiedStart + 1;
-          g.endLine = g.modifiedStart + g.addedCount;
-        } else {
-          g.startLine = g.modifiedStart;
-          g.endLine = Math.max(1, g.modifiedStart + 1);
-        }
-      }
-      return groups;
-    }
+    // Việc chia khối thay đổi nằm ở `buildChangeGroups()` trong
+    // src/diff/hunkGroups.ts và được gửi sang kèm message `set` (msg.groups):
+    // sidebar + DiffManager cũng cần đúng tập khối đó để dòng Keep/Undo trỏ đúng
+    // thay đổi, nên webview không tự chia nữa.
 
     function renderGroupWidgets() {
       for (const w of state.groupWidgets) {

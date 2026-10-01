@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { DiffManager } from './diffManager';
 import { calculateHunks } from './hunkCalculator';
+import { buildChangeGroups } from './hunkGroups';
 import { fromLf, toLf } from './eol';
 
 export const DIFF_EDITOR_VIEW_TYPE = 'ai-cli-diff-view.diffEditor';
@@ -73,7 +74,14 @@ export class DiffEditorProvider implements vscode.CustomTextEditorProvider {
       const originalContent = toLf(snapshot);
       const currentContent = toLf(document.getText());
       const hunks = calculateHunks(originalContent, currentContent);
+      // Chia khối ở đây chứ không ở webview: sidebar (danh sách thay đổi) và
+      // DiffManager.acceptChangeBlock() cũng dùng buildChangeGroups(), nên chỉ
+      // có một nguồn duy nhất quyết định thứ tự/id của các khối.
+      const groups = buildChangeGroups(hunks);
       const nav = this.computeNav(filePath);
+      // Khối cần cuộn tới, nếu lần mở này đến từ danh sách thay đổi ở sidebar /
+      // nav bar. Dùng 1 lần — đọc xong DiffManager tự xoá.
+      const revealGroupId = this.diffManager.consumePendingReveal(filePath);
       void webviewPanel.webview.postMessage({
         type: 'set',
         filePath,
@@ -81,6 +89,8 @@ export class DiffEditorProvider implements vscode.CustomTextEditorProvider {
         originalContent,
         currentContent,
         hunks,
+        groups,
+        revealGroupId,
         theme: currentMonacoTheme(),
         editorConfig: readEditorConfig(),
         nav,

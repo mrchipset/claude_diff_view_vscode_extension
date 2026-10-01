@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { PtySession } from './ptySession';
 import { findInstallableForPrimary, installFont } from './fontInstaller';
-import { DiffManager } from '../diff/diffManager';
+import { DiffManager, FileChangeSummary } from '../diff/diffManager';
 import {
   buildPendingFilesInnerHtml,
   SessionState,
@@ -54,13 +54,19 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
   private errorMessage = '';
   private diffDisposable?: vscode.Disposable;
   private lastTerminalFocused = false;
+  /**
+   * Tăng mỗi lần postFilesUpdate() chạy. Vòng lặp thu thập change summary là
+   * async, nên một lần refresh mới có thể xen vào giữa lúc lần cũ đang đọc file;
+   * chỉ lần mới nhất được phép post, nếu không list sẽ nhảy về trạng thái cũ.
+   */
+  private filesUpdateSeq = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly diffManager: DiffManager
   ) {
     this.diffDisposable = this.diffManager.onDidChangeDiffs(() => {
-      this.postFilesUpdate();
+      void this.postFilesUpdate();
     });
   }
 
@@ -69,22 +75,22 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
     this.sessionState = 'running';
     this.lastPrompt = prompt;
     this.errorMessage = '';
-    this.postFilesUpdate();
+    void this.postFilesUpdate();
   }
 
   setIdle(): void {
     this.sessionState = 'idle';
-    this.postFilesUpdate();
+    void this.postFilesUpdate();
   }
 
   setError(message: string): void {
     this.sessionState = 'error';
     this.errorMessage = message;
-    this.postFilesUpdate();
+    void this.postFilesUpdate();
   }
 
   refresh(): void {
-    this.postFilesUpdate();
+    void this.postFilesUpdate();
   }
 
   focusTerminal(): void {
@@ -103,8 +109,13 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
     return this.lastTerminalFocused;
   }
 
-  private postFilesUpdate(): void {
+  private async postFilesUpdate(): Promise<void> {
     if (!this.view) {
+      return;
+    }
+    const seq = ++this.filesUpdateSeq;
+    const changeSummaries = await this.collectChangeSummaries(seq);
+    if (seq !== this.filesUpdateSeq || !this.view) {
       return;
     }
     const html = buildPendingFilesInnerHtml({
@@ -113,8 +124,25 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
       sessionState: this.sessionState,
       lastPrompt: this.lastPrompt,
       errorMessage: this.errorMessage,
+      changeSummaries,
     });
     void this.view.webview.postMessage({ type: 'filesUpdate', html });
+  }
+
+  /**
+   * Diff từng pending file để lấy +a/-r và danh sách khối thay đổi cho sidebar.
+   * Đọc tuần tự (không Promise.all) để không mở hàng chục file cùng lúc trên
+   * workspace lớn — danh sách pending vốn ngắn. `seq` (nếu có) cho phép bỏ dở
+   * khi đã có lần refresh mới hơn chen vào.
+   */
+  private async collectChangeSummaries(seq?: number): Promise<Map<string, FileChangeSummary>> {
+    const changeSummaries = new Map<string, FileChangeSummary>();
+    for (const filePath of this.diffManager.getPendingFiles()) {
+      const summary = await this.diffManager.getFileChangeSummary(filePath);
+      if (summary) { changeSummaries.set(filePath, summary); }
+      if (seq !== undefined && seq !== this.filesUpdateSeq) { break; }
+    }
+    return changeSummaries;
   }
 
   private fileIconsBase(): string {
@@ -427,14 +455,14 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [xtermDir, iconsDir, introDir],
     };
 
-    webviewView.webview.onDidReceiveMessage((msg: IncomingMessage) => {
+    webviewView.webview.onDidReceiveMessage(async (msg: IncomingMessage) => {
       if (!msg || typeof msg !== 'object') {
         return;
       }
       switch (msg.type) {
         case 'ready':
           // Push initial files page state once the webview is ready.
-          this.postFilesUpdate();
+          void this.postFilesUpdate();
           if (!this.context.globalState.get<boolean>(INTRODUCE_SEEN_KEY)) {
             void this.view?.webview.postMessage({ type: 'showIntroduce' });
           }
@@ -584,7 +612,21 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
         }
         case 'openFile':
           if (msg.path && typeof msg.path === 'string') {
-            void vscode.commands.executeCommand('ai-cli-diff-view.openPendingFile', msg.path);
+            if (msg.groupId) {
+              // Bấm vào một dòng thay đổi -> mở diff và cuộn tới đúng khối đó.
+              await this.diffManager.openChangeBlock(msg.path, msg.groupId);
+            } else {
+              void vscode.commands.executeCommand('ai-cli-diff-view.openPendingFile', msg.path);
+            }
+          }
+          return;
+        case 'changeBlock':
+          // Keep/Undo từ danh sách thay đổi ở sidebar. Không cần postFilesUpdate()
+          // ở đây: cả hai đường accept/reject đều fire onDidChangeDiffs.
+          if (msg.action === 'keep') {
+            await this.diffManager.acceptChangeBlock(msg.path, msg.groupId);
+          } else {
+            await this.diffManager.rejectChangeBlock(msg.path, msg.groupId);
           }
           return;
         case 'introduceSeen':
@@ -602,10 +644,10 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    this.render();
+    void this.render();
   }
 
-  private render(): void {
+  private async render(): Promise<void> {
     if (!this.view) {
       return;
     }
@@ -615,6 +657,7 @@ export class TerminalPanelProvider implements vscode.WebviewViewProvider {
       sessionState: this.sessionState,
       lastPrompt: this.lastPrompt,
       errorMessage: this.errorMessage,
+      changeSummaries: await this.collectChangeSummaries(),
     });
 
     this.view.webview.html = buildTerminalHtml({

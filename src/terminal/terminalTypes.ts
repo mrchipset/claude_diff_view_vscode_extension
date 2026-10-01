@@ -89,7 +89,8 @@ export type IncomingMessage =
   | { type: 'promptFileExtensions'; action: 'new' | 'edit'; value?: string }
   | { type: 'installFont'; primary: string }
   | { type: 'reloadWindow' }
-  | { type: 'openFile'; path: string }
+  | { type: 'openFile'; path: string; groupId?: string }
+  | { type: 'changeBlock'; action: 'keep' | 'undo'; path: string; groupId: string }
   | { type: 'introduceSeen' }
   | { type: 'terminalFocusState'; focused: boolean }
   | { type: 'viewTooNarrow' };

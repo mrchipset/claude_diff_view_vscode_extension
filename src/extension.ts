@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  const navBarPanel = new NavBarPanel(context.extensionUri);
+  const navBarPanel = new NavBarPanel(context.extensionUri, diffManager);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(NavBarPanel.viewType, navBarPanel)
   );
@@ -136,9 +136,11 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
 
-    const activePath = diffManager.getActiveFilePath();
-    navBarPanel.setActiveFile(activePath);
-    const navAnchor = activePath ?? pendingFiles[0];
+    // Dùng luôn file neo (đang mở, hoặc file pending đầu tiên) chứ không chỉ
+    // tab đang active: khi chưa mở diff tab nào thì panel vẫn có file để mô tả,
+    // và nhờ vậy hiện được +a/-r cùng danh sách khối của file đó.
+    const navAnchor = diffManager.getActiveFilePath() ?? pendingFiles[0];
+    navBarPanel.setActiveFile(navAnchor);
     navBarPanel.update(navigationManager.getNavigationInfo(navAnchor));
     void vscode.commands.executeCommand('setContext', 'ai-cli-diff-view.hasPendingDiff', true);
   }

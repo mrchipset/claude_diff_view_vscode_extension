@@ -10,6 +10,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { calculateHunks } from './hunkCalculator';
+import {
+  applyGroupAccept,
+  applyGroupReject,
+  buildChangeGroups,
+  ChangeGroup,
+} from './hunkGroups';
 import { detectEol, fromLf, toLf } from './eol';
 import { exceedsLineLimit } from '../watcher/fileSizeLimit';
 import { DIFF_EDITOR_VIEW_TYPE } from './diffWebviewPanel';
@@ -35,6 +41,19 @@ function canonicalCasePath(filePath: string): string {
 
 function isFileNotFound(error: unknown): boolean {
   return error instanceof vscode.FileSystemError && error.code === 'FileNotFound';
+}
+
+/**
+ * Tóm tắt thay đổi của một pending file: tổng số dòng thêm/xoá và danh sách
+ * khối thay đổi. Sidebar dùng nó để render "danh sách thay đổi" kiểu Copilot.
+ */
+export interface FileChangeSummary {
+  /** Tổng số dòng được thêm trong file. */
+  added: number;
+  /** Tổng số dòng bị xoá trong file. */
+  removed: number;
+  /** Các khối thay đổi, đã gom và tính sẵn (xem hunkGroups.ts). */
+  groups: ChangeGroup[];
 }
 
 export class DiffManager {
@@ -127,6 +146,7 @@ export class DiffManager {
     const hunks = calculateHunks(toLf(snapshot.content), toLf(modifiedContent));
     if (hunks.length === 0) {
       this.snapshots.delete(absPath);
+      this.pendingReveal.delete(absPath);
       void this.store.save(this.snapshots);
       this._onDidChangeDiffs.fire();
       return;
@@ -186,8 +206,13 @@ export class DiffManager {
   /**
    * Accept toàn bộ thay đổi của 1 file: file đã sẵn trên đĩa với currentContent,
    * chỉ cần xoá snapshot.
+   *
+   * `navigate: false` dành cho danh sách ở sidebar: khi thao tác phát ra từ
+   * sidebar (user không đứng trong diff tab), mở lại text editor / nhảy sang
+   * file pending kế tiếp sẽ cướp focus khỏi danh sách một cách bất ngờ.
    */
-  async accept(filePath: string): Promise<void> {
+  async accept(filePath: string, options?: { navigate?: boolean }): Promise<void> {
+    const navigate = options?.navigate !== false;
     const absPath = normalizePath(filePath);
     if (!this.snapshots.has(absPath)) { return; }
 
@@ -201,10 +226,11 @@ export class DiffManager {
     this.snapshots.delete(absPath);
     void this.store.save(this.snapshots);
     this.closePanel(absPath);
-    await this.reopenAsTextEditor(absPath);
-
-    if (nextTarget) {
-      await this.openDiff(nextTarget);
+    if (navigate) {
+      await this.reopenAsTextEditor(absPath);
+      if (nextTarget) {
+        await this.openDiff(nextTarget);
+      }
     }
     this._onDidChangeDiffs.fire();
   }
@@ -253,6 +279,7 @@ export class DiffManager {
     void this.store.save(this.snapshots);
     for (const p of pendingFiles) {
       this.closePanel(normalizePath(p));
+      this.pendingReveal.delete(normalizePath(p));
     }
     this._onDidChangeDiffs.fire();
     return count;
@@ -273,6 +300,69 @@ export class DiffManager {
   /** Alias dùng bởi DiffEditorProvider; trả về content của snapshot (left side). */
   getSnapshotContent(filePath: string): string | undefined {
     return this.getSnapshot(filePath);
+  }
+
+  /**
+   * filePath (normalized) -> id khối cần cuộn tới ngay sau khi diff tab mở /
+   * render xong. Đặt trước openDiff() vì tab mới chỉ render xong khi webview gửi
+   * 'ready' — lúc đó message mới có chỗ để gửi.
+   */
+  private pendingReveal = new Map<string, string>();
+
+  /**
+   * Mở diff của file rồi cuộn tới đúng khối thay đổi (dùng cho danh sách thay
+   * đổi ở sidebar / nav bar).
+   */
+  async openChangeBlock(filePath: string, groupId: string): Promise<void> {
+    const absPath = normalizePath(filePath);
+    if (!this.snapshots.has(absPath)) { return; }
+    this.pendingReveal.set(absPath, groupId);
+    await this.openDiff(absPath);
+  }
+
+  /** Dùng 1 lần: DiffEditorProvider gọi khi dựng message `set`. */
+  consumePendingReveal(filePath: string): string | undefined {
+    const absPath = normalizePath(filePath);
+    const groupId = this.pendingReveal.get(absPath);
+    this.pendingReveal.delete(absPath);
+    return groupId;
+  }
+
+  /**
+   * Tóm tắt thay đổi hiện tại của 1 pending file (tổng dòng +a/-r và danh sách
+   * khối). Trả `undefined` nếu file không còn pending hoặc không đọc được.
+   *
+   * Nội dung so sánh hoàn toàn ở LF, giống DiffEditorProvider.postSet() — hai
+   * bên phải cho ra cùng tập khối, nếu không thì chỉ số khối ở sidebar sẽ trỏ
+   * nhầm sang thay đổi khác.
+   */
+  async getFileChangeSummary(filePath: string): Promise<FileChangeSummary | undefined> {
+    const absPath = normalizePath(filePath);
+    const snapshot = this.snapshots.get(absPath);
+    if (!snapshot) { return undefined; }
+    const current = await this.readCurrentText(absPath);
+    if (current === undefined) { return undefined; }
+
+    const groups = buildChangeGroups(calculateHunks(toLf(snapshot.content), toLf(current)));
+    let added = 0;
+    let removed = 0;
+    for (const g of groups) {
+      added += g.addedCount;
+      removed += g.removedCount;
+    }
+    return { added, removed, groups };
+  }
+
+  /** Nội dung hiện tại (LF) của file: ưu tiên document đang mở, không thì đọc đĩa. */
+  private async readCurrentText(absPath: string): Promise<string | undefined> {
+    const doc = vscode.workspace.textDocuments.find(d => normalizePath(d.uri.fsPath) === absPath);
+    if (doc) { return toLf(doc.getText()); }
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
+      return toLf(Buffer.from(bytes).toString('utf8'));
+    } catch {
+      return undefined;
+    }
   }
 
   setLastCursor(filePath: string, line: number, column: number, topLine?: number): void {
@@ -455,7 +545,8 @@ export class DiffManager {
   async applyHunkAcceptFromWebview(
     filePath: string,
     newOriginal: string,
-    newCurrent: string
+    newCurrent: string,
+    options?: { navigate?: boolean }
   ): Promise<void> {
     const absPath = normalizePath(filePath);
     const snapshot = this.snapshots.get(absPath);
@@ -470,7 +561,7 @@ export class DiffManager {
     void this.store.save(this.snapshots);
 
     if (newOriginal === newCurrent) {
-      await this.accept(absPath);
+      await this.accept(absPath, options);
     } else {
       this._onDidChangeDiffs.fire();
     }
@@ -483,8 +574,10 @@ export class DiffManager {
   async applyHunkRejectFromWebview(
     filePath: string,
     newOriginal: string,
-    newCurrent: string
+    newCurrent: string,
+    options?: { navigate?: boolean }
   ): Promise<void> {
+    const navigate = options?.navigate !== false;
     const absPath = normalizePath(filePath);
     const snapshot = this.snapshots.get(absPath);
     if (!snapshot) { return; }
@@ -507,11 +600,56 @@ export class DiffManager {
       void this.store.save(this.snapshots);
       this.closePanel(absPath);
 
-      if (nextTarget) {
+      if (navigate && nextTarget) {
         await this.openDiff(nextTarget);
       }
     }
     this._onDidChangeDiffs.fire();
+  }
+
+  /**
+   * Accept 1 khối thay đổi theo `groupId` (từ danh sách ở sidebar). Khối được
+   * tính lại tại đây từ snapshot + nội dung hiện tại, nên nó phải cho ra đúng
+   * tập khối mà sidebar đang hiển thị — cả hai đều dùng buildChangeGroups().
+   */
+  async acceptChangeBlock(filePath: string, groupId: string): Promise<void> {
+    const found = await this.findChangeBlock(filePath, groupId);
+    if (!found) { return; }
+    const { newOriginal, newCurrent } = applyGroupAccept(
+      found.originalContent, found.currentContent, found.group
+    );
+    // Thao tác phát ra từ sidebar -> đừng cướp focus bằng cách mở text editor
+    // hay nhảy sang file pending kế tiếp.
+    await this.applyHunkAcceptFromWebview(filePath, newOriginal, newCurrent, { navigate: false });
+  }
+
+  /**
+   * Reject 1 khối thay đổi theo `groupId`: ghi phần nguyên bản của riêng khối
+   * đó trở lại file trên đĩa.
+   */
+  async rejectChangeBlock(filePath: string, groupId: string): Promise<void> {
+    const found = await this.findChangeBlock(filePath, groupId);
+    if (!found) { return; }
+    const { newOriginal, newCurrent } = applyGroupReject(
+      found.originalContent, found.currentContent, found.group
+    );
+    await this.applyHunkRejectFromWebview(filePath, newOriginal, newCurrent, { navigate: false });
+  }
+
+  private async findChangeBlock(
+    filePath: string,
+    groupId: string
+  ): Promise<{ group: ChangeGroup; originalContent: string; currentContent: string } | undefined> {
+    const absPath = normalizePath(filePath);
+    const snapshot = this.snapshots.get(absPath);
+    if (!snapshot) { return undefined; }
+    const current = await this.readCurrentText(absPath);
+    if (current === undefined) { return undefined; }
+
+    const originalContent = toLf(snapshot.content);
+    const group = buildChangeGroups(calculateHunks(originalContent, current))
+      .find(g => g.id === groupId);
+    return group ? { group, originalContent, currentContent: current } : undefined;
   }
 
   /**

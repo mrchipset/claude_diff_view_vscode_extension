@@ -1256,16 +1256,73 @@ ${FONT_OPTIONS.map((f) => {
       });
 
       // ---- Files page bindings (rebound after every filesUpdate) ----
+      // Danh sách được render lại toàn bộ mỗi lần update nên trạng thái mở/đóng
+      // của từng file phải giữ ở JS, không thì vừa Keep một thay đổi là cây tự
+      // thu gọn lại.
+      const expandedFiles = new Set();
+
+      function setFileExpanded(node, twisty, expanded) {
+        const list = node.querySelector('.change-list');
+        if (!list) return;
+        if (expanded) {
+          list.removeAttribute('hidden');
+        } else {
+          list.setAttribute('hidden', '');
+        }
+        if (twisty) twisty.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      }
+
       function bindFilesPage() {
         const tree = document.getElementById('file-tree');
-        if (tree) {
-          tree.querySelectorAll('.tree-row-file').forEach((btn) => {
-            btn.addEventListener('click', () => {
-              const p = btn.getAttribute('data-path');
-              if (p) vscode.postMessage({ type: 'openFile', path: p });
+        if (!tree) return;
+
+        tree.querySelectorAll('[data-toggle-path]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const p = btn.getAttribute('data-toggle-path');
+            const node = btn.closest('.tree-node-file');
+            if (!p || !node) return;
+            const list = node.querySelector('.change-list');
+            const willExpand = !!(list && list.hasAttribute('hidden'));
+            setFileExpanded(node, btn, willExpand);
+            if (willExpand) expandedFiles.add(p); else expandedFiles.delete(p);
+          });
+        });
+
+        // Thân dòng file mở diff của file đó; dòng khối thay đổi thì mở diff và
+        // nhảy thẳng tới khối (data-open-group).
+        tree.querySelectorAll('[data-path]').forEach((el) => {
+          el.addEventListener('click', () => {
+            const p = el.getAttribute('data-path');
+            if (!p) return;
+            const groupId = el.getAttribute('data-open-group');
+            vscode.postMessage(groupId
+              ? { type: 'openFile', path: p, groupId: groupId }
+              : { type: 'openFile', path: p });
+          });
+        });
+
+        tree.querySelectorAll('[data-change-action]').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const path = btn.getAttribute('data-change-path');
+            const groupId = btn.getAttribute('data-change-group');
+            if (!path || !groupId) return;
+            vscode.postMessage({
+              type: 'changeBlock',
+              action: btn.getAttribute('data-change-action') === 'keep' ? 'keep' : 'undo',
+              path,
+              groupId,
             });
           });
-        }
+        });
+
+        tree.querySelectorAll('[data-toggle-path]').forEach((btn) => {
+          const p = btn.getAttribute('data-toggle-path');
+          if (p && expandedFiles.has(p)) {
+            setFileExpanded(btn.closest('.tree-node-file'), btn, true);
+          }
+        });
       }
       bindFilesPage();
 
