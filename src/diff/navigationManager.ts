@@ -32,8 +32,16 @@ export class NavigationManager {
       return;
     }
 
-    const currentEditor = vscode.window.activeTextEditor;
-    const currentPath = currentEditor ? normalizePath(currentEditor.document.uri.fsPath) : '';
+    // KHÔNG dùng vscode.window.activeTextEditor để đoán "đang ở file nào":
+    // diff tab là custom editor (webview), nên khi đang xem diff thì
+    // activeTextEditor là undefined -> currentPath luôn rỗng -> rơi vào nhánh
+    // "không tìm thấy" bên dưới và prev luôn nhảy về file CUỐI (bấm như không
+    // có gì xảy ra nếu đang đứng sẵn ở file cuối).
+    //
+    // Dùng đúng file neo mà nav bar đang hiển thị: tab diff đang active, không
+    // thì file pending đầu tiên — cùng công thức với updateNavBarState() ở
+    // extension.ts, nên nút bấm và con số "n / N" không bao giờ lệch nhau.
+    const currentPath = this.diffManager.getActiveFilePath() ?? pendingFiles[0]!;
     
     // Nếu chỉ còn 1 file pending: nếu user đang đứng ở file khác thì mở diff đó ngay.
     if (pendingFiles.length === 1) {
